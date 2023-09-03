@@ -6,6 +6,7 @@
 #include <fstream>
 #include <chrono>
 #include <cv_bridge/cv_bridge.h>
+#include <opencv2/core/core.hpp>
 #include <image_transport/image_transport.h>
 
 /* ORB-SLAM3 Library */
@@ -32,8 +33,9 @@
 
 #include "utility.hpp"
 
+
 class MonocularSlamNode : public rclcpp::Node {
-    
+
 public:
 
     MonocularSlamNode(ORB_SLAM3::System* pSLAM);
@@ -42,13 +44,34 @@ public:
 private:
     using ImageMsg = sensor_msgs::msg::Image;
 
+    // Setup
+    void setup_ros_publishers(Eigen::Vector3d rpy_rad);
+
+    // Main Callback function
     void GrabImage(const sensor_msgs::msg::Image::SharedPtr msg);
 
+    // Main publish message function
+    void publish_ros_tf_transform(Sophus::SE3f Twc_SE3f, std_msgs::msg::Header header);
+
+    // Transformation
+    tf2::Transform SE3f_to_tfTransform(Sophus::SE3f T_SE3f);
+
     ORB_SLAM3::System* m_SLAM;
+    ORB_SLAM3::System::eSensor sensor_type;
+
+    Sophus::SE3f Tc0w;
 
     cv_bridge::CvImagePtr m_cvImPtr;
 
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr m_image_subscriber;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr map_points_pub;
+
+    std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster;
+
+    geometry_msgs::msg::TransformStamped stamped_transform;
+
+    string child_frame_id;
+    string world_frame_id;
 };
 
 #endif
