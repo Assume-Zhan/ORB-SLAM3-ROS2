@@ -70,8 +70,36 @@ void MonocularSlamNode::GrabImage(const ImageMsg::SharedPtr msg) {
 
 void MonocularSlamNode::publish_ros_tf_transform(Sophus::SE3f Twc_SE3f, std_msgs::msg::Header header) {
 
+    tf2::Transform tf_transform = SE3f_to_tfTransform(Twc_SE3f);
+
+    stamped_transform.header = header;
+    stamped_transform.header.frame_id = world_frame_id;
+
+    // TODO : child frame id should be the header frame
+    // Transform map_to_camera to map_to_baselink
+    stamped_transform.child_frame_id = child_frame_id;
+
+    tf2::toMsg(tf_transform, stamped_transform.transform);
+
+    tf_broadcaster->sendTransform(stamped_transform);
 }
 
 tf2::Transform MonocularSlamNode::SE3f_to_tfTransform(Sophus::SE3f T_SE3f) {
 
+    Eigen::Matrix3f R_mat = T_SE3f.rotationMatrix();
+    Eigen::Vector3f t_vec = T_SE3f.translation();
+
+    tf2::Matrix3x3 R_tf(
+        R_mat(0, 0), R_mat(0, 1), R_mat(0, 2),
+        R_mat(1, 0), R_mat(1, 1), R_mat(1, 2),
+        R_mat(2, 0), R_mat(2, 1), R_mat(2, 2)
+    );
+
+    tf2::Vector3 t_tf(
+        t_vec(0),
+        t_vec(1),
+        t_vec(2)
+    );
+
+    return tf2::Transform(R_tf, t_tf);
 }
