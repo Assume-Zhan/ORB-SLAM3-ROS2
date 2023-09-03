@@ -52,6 +52,10 @@ private:
 
     // Main publish message function
     void publish_ros_tf_transform(Sophus::SE3f Twc_SE3f, std_msgs::msg::Header header);
+    void publish_ros_tracked_mappoints(std::vector<ORB_SLAM3::MapPoint*> map_points, rclcpp::Time msg_time);
+
+    // ORB-SLAM3 map point to point cloud
+    sensor_msgs::msg::PointCloud2 tracked_mappoints_to_pointcloud(std::vector<ORB_SLAM3::MapPoint*> map_points, rclcpp::Time msg_time);
 
     // Transformation
     tf2::Transform SE3f_to_tfTransform(Sophus::SE3f T_SE3f);
