@@ -30,6 +30,8 @@ void MonocularSlamNode::setup_ros_publishers(Eigen::Vector3d rpy_rad) {
 
     m_image_subscriber = this->create_subscription<ImageMsg>("camera", 10, std::bind(&MonocularSlamNode::GrabImage, this, std::placeholders::_1));
 
+    map_points_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>("cloud_in", 1);
+    
     tf_broadcaster  = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
     
     if (!rpy_rad.isZero(0)) {
