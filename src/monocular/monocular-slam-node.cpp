@@ -8,7 +8,7 @@ MonocularSlamNode::MonocularSlamNode(ORB_SLAM3::System* pSLAM) : Node("ORB_SLAM3
 
     // Original orientation
     Eigen::Vector3d rpy_rad;
-    rpy_rad << 1.57079632679, 0, 0;
+    rpy_rad << 1.9, 0, 0;
 
     this->setup_ros_publishers(rpy_rad);
 
@@ -68,7 +68,7 @@ void MonocularSlamNode::GrabImage(const ImageMsg::SharedPtr msg) {
     // Broadcast TF "map frame" to "camera pose"
     // TODO : Listen to base_link -> camera frame and only publish on "map frame" to "base_footprint"
     publish_ros_tf_transform(Twc, msg->header);
-    publish_ros_tracked_mappoints(m_SLAM->GetTrackedMapPoints(), msg->header.stamp);
+    publish_ros_tracked_mappoints(m_SLAM->GetAllMapPoints(), msg->header.stamp);
 }
 
 void MonocularSlamNode::publish_ros_tf_transform(Sophus::SE3f Twc_SE3f, std_msgs::msg::Header header) {
