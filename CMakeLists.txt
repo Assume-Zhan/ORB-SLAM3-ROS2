@@ -66,7 +66,7 @@ install(TARGETS mono rgbd stereo stereo-inertial
   DESTINATION lib/${PROJECT_NAME})
 
 # Install launch files.
-install(DIRECTORY config
+install(DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME}/)
 
 ament_package()
