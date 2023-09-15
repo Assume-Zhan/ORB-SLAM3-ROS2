@@ -8,7 +8,7 @@ MonocularSlamNode::MonocularSlamNode(ORB_SLAM3::System* pSLAM) : Node("ORB_SLAM3
 
     // Original orientation
     Eigen::Vector3d rpy_rad;
-    rpy_rad << 0, 0, 0;
+    rpy_rad << 1.9, 0, 0;
 
     this->setup_ros_publishers(rpy_rad);
 
@@ -16,6 +16,17 @@ MonocularSlamNode::MonocularSlamNode(ORB_SLAM3::System* pSLAM) : Node("ORB_SLAM3
 
     world_frame_id = "map";
     child_frame_id = "base_footprint";
+
+    for (auto i = 0 ; i < 4 ; i++)
+        grid_lim_[i] = cloud_lim_[i] * scale_fac_;
+
+    h_ = grid_lim_[1] - grid_lim_[0];
+    w_ = grid_lim_[3] - grid_lim_[2];
+
+    norm_fac_[0] = float(h_ - 1) / float(h_);
+    norm_fac_[1] = float(w_ - 1) / float(w_);
+
+    CreateCvMat (h_, w_);
 }
 
 MonocularSlamNode::~MonocularSlamNode() {
@@ -34,6 +45,7 @@ void MonocularSlamNode::setup_ros_publishers(Eigen::Vector3d rpy_rad) {
 
     all_kfs_pts_pub = this->create_publisher<geometry_msgs::msg::PoseArray>("all_kfs", 1);
     single_kf_pts_pub = this->create_publisher<geometry_msgs::msg::PoseArray>("single_kfs", 1);
+    costmap_pub = this->create_publisher<nav_msgs::msg::OccupancyGrid>("costmap", 1);
     
     tf_broadcaster  = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
     
@@ -70,11 +82,14 @@ void MonocularSlamNode::GrabImage(const ImageMsg::SharedPtr msg) {
 
     // Broadcast TF "map frame" to "camera pose"
     // TODO : Listen to base_link -> camera frame and only publish on "map frame" to "base_footprint"
-    publish_ros_tf_transform(Twc, msg->header);
+    // publish_ros_tf_transform(Twc, msg->header);
     publish_ros_tracked_mappoints(m_SLAM->GetAllMapPoints(), msg->header.stamp);
 
-    all_kfs_pts_pub->publish(GetAllKfsPts(msg->header.stamp));
-    single_kf_pts_pub->publish(GetSingleKfPts(msg->header.stamp));
+    geometry_msgs::msg::PoseArray single_key_frame_pts = GetSingleKfPts(msg->header.stamp);
+
+    // all_kfs_pts_pub->publish(all_key_frame_pts);
+    single_kf_pts_pub->publish(single_key_frame_pts);
+    PoseToCostmap(single_key_frame_pts, msg->header.stamp);
 }
 
 void MonocularSlamNode::publish_ros_tf_transform(Sophus::SE3f Twc_SE3f, std_msgs::msg::Header header) {
@@ -254,7 +269,9 @@ geometry_msgs::msg::PoseArray MonocularSlamNode::GetAllKfsPts(rclcpp::Time msg_t
 
 geometry_msgs::msg::PoseArray MonocularSlamNode::GetSingleKfPts (rclcpp::Time msg_time) {
 
-    ORB_SLAM3::KeyFrame* kf_ = m_SLAM->getTracker()->mCurrentFrame.mpReferenceKF;
+    ORB_SLAM3::KeyFrame* kf_;
+
+    ORB_SLAM3::Frame f = m_SLAM->getTracker();
 
     // camera_pose, pts, ...
     geometry_msgs::msg::PoseArray kf_pts_array_;
@@ -262,11 +279,25 @@ geometry_msgs::msg::PoseArray MonocularSlamNode::GetSingleKfPts (rclcpp::Time ms
     kf_pts_array_.header.frame_id = world_frame_id;
     kf_pts_array_.header.stamp = msg_time;
 
-    if (kf_->isBad()) return kf_pts_array_;
+    if(f.is_keyframe) {
+        kf_ = f.mpReferenceKF;
+    }
+    else return kf_pts_array_;
 
     // get rotation information
-    cv::Mat R_ = ORB_SLAM3::Converter::toCvMat(kf_->GetRotation()).t();
-    cv::Mat T_ = ORB_SLAM3::Converter::toCvMat(kf_->GetCameraCenter());
+    Eigen::Matrix3f R = kf_->GetRotation().transpose();
+    Eigen::Vector3f T = kf_->GetCameraCenter();
+
+    if (sensor_type == ORB_SLAM3::System::MONOCULAR || sensor_type == ORB_SLAM3::System::STEREO) {
+        Sophus::SE3f Tc0mp(R, T);
+        Sophus::SE3f Twmp = Tc0w.inverse() * Tc0mp;
+        T = Twmp.translation();
+        R = Twmp.rotationMatrix();
+    }
+
+    cv::Mat R_ = ORB_SLAM3::Converter::toCvMat(R);
+    cv::Mat T_ = ORB_SLAM3::Converter::toCvMat(T);
+
     vector<float> q_ = ORB_SLAM3::Converter::toQuaternion(R_);
 
     // get camera position
@@ -286,7 +317,15 @@ geometry_msgs::msg::PoseArray MonocularSlamNode::GetSingleKfPts (rclcpp::Time ms
     for (auto pt_ : map_pts_) {
         if (!pt_ || pt_->isBad()) continue;
 
-        cv::Mat pt_position_ = ORB_SLAM3::Converter::toCvMat(pt_->GetWorldPos());
+        Eigen::Vector3f pt_p_ = pt_->GetWorldPos();
+
+        if (sensor_type == ORB_SLAM3::System::MONOCULAR || sensor_type == ORB_SLAM3::System::STEREO) {
+            Sophus::SE3f Tc0mp(Eigen::Matrix3f::Identity(), pt_p_);
+            Sophus::SE3f Twmp = Tc0w.inverse() * Tc0mp;
+            pt_p_ = Twmp.translation();
+        }
+
+        cv::Mat pt_position_ = ORB_SLAM3::Converter::toCvMat(pt_p_);
 
         if (pt_position_.empty()) continue;
 
@@ -298,4 +337,146 @@ geometry_msgs::msg::PoseArray MonocularSlamNode::GetSingleKfPts (rclcpp::Time ms
     }
 
     return kf_pts_array_;
+}
+
+void MonocularSlamNode::SetGridOrigin (nav_msgs::msg::OccupancyGrid &grid, float &grid_min_x, float &grid_min_y) {
+    grid.info.origin.orientation.x = 0;
+    grid.info.origin.orientation.y = 0;
+    grid.info.origin.orientation.z = 0;
+    grid.info.origin.orientation.w = 1;
+    grid.info.origin.position.x = grid_min_x * grid.info.resolution ;
+    grid.info.origin.position.y = grid_min_y * grid.info.resolution ;
+    grid.info.origin.position.z = 0;
+}
+
+void MonocularSlamNode::CreateCvMat (const unsigned int h, const unsigned int w) {
+
+    global_occupied_counter_.create(h, w, CV_32SC1);
+    global_visit_counter_.create(h, w, CV_32SC1);
+    global_occupied_counter_.setTo(cv::Scalar(0));
+    global_visit_counter_.setTo(cv::Scalar(0));
+
+    grid_map_.create(h, w, CV_32FC1);
+
+    grid_map_cost_msg_.data.resize(h * w);
+    grid_map_cost_msg_.info.width = w;
+    grid_map_cost_msg_.info.height = h;
+    grid_map_cost_msg_.header.frame_id = world_frame_id;
+    grid_map_cost_msg_.info.resolution = 1.0 / scale_fac_;
+
+    SetGridOrigin (grid_map_cost_msg_, grid_lim_[0], grid_lim_[2]);
+    grid_map_int_ = cv::Mat(h, w, CV_8SC1, (char*)(grid_map_cost_msg_.data.data()));
+
+    // grid_map_thresh_resized_.create(h * resize_fac_, w * resize_fac_, CV_8UC1);
+
+    local_occupied_counter_.create(h, w, CV_32SC1);
+    local_visit_counter_.create(h, w, CV_32SC1);
+    local_map_pt_mask_.create(h, w, CV_8UC1);
+}
+
+void MonocularSlamNode::PoseToCostmap (geometry_msgs::msg::PoseArray& kf_pts_array, rclcpp::Time msg_time) {
+
+    grid_map_cost_msg_.header.stamp = msg_time;
+    UpdateGridMap(kf_pts_array);
+
+    // Will publish
+    costmap_pub->publish(grid_map_cost_msg_);
+}
+
+void MonocularSlamNode::UpdateGridMap (geometry_msgs::msg::PoseArray& kf_pts_array) {
+
+    if(kf_pts_array.poses.size() == 0) return;
+
+    const geometry_msgs::msg::Point &kf_position = kf_pts_array.poses[0].position;
+
+    kf_pos_x_ = kf_position.x * scale_fac_;
+    kf_pos_y_ = kf_position.y * scale_fac_;
+    kf_pos_grid_x_ = int( floor( (kf_pos_x_ - grid_lim_[0]) * norm_fac_[0] ) );
+    kf_pos_grid_y_ = int( floor( (kf_pos_y_ - grid_lim_[2]) * norm_fac_[1] ) );
+
+    if (kf_pos_grid_x_ < 0 || kf_pos_grid_x_ >= h_) return;
+    if (kf_pos_grid_y_ < 0 || kf_pos_grid_y_ >= w_) return;
+
+    ++n_kf_received_;
+
+    unsigned int n_pts = kf_pts_array.poses.size() - 1;
+    ProcessPts(kf_pts_array.poses, n_pts, 1);
+    GetGridMap();
+}
+
+void MonocularSlamNode::ProcessPts (const std::vector<geometry_msgs::msg::Pose> &pts, unsigned int n_pts, unsigned int start_id) {
+
+    unsigned int end_id = start_id + n_pts;
+
+    for (unsigned int pt_id = start_id; pt_id < end_id; ++pt_id)
+        ProcessPt(pts[pt_id].position, global_occupied_counter_, global_visit_counter_, local_map_pt_mask_);
+}
+
+void MonocularSlamNode::ProcessPt (const geometry_msgs::msg::Point &curr_pt, cv::Mat &occupied, cv::Mat &visited, cv::Mat &pt_mask) {
+    float pt_pos_x = curr_pt.x * scale_fac_;
+    float pt_pos_y = curr_pt.y * scale_fac_;
+
+    int pt_pos_grid_x = int(floor((pt_pos_x - grid_lim_[0]) * norm_fac_[0]));
+    int pt_pos_grid_y = int(floor((pt_pos_y - grid_lim_[2]) * norm_fac_[1]));
+
+    if ( pt_pos_grid_x < 0 || pt_pos_grid_x >= h_ ) return;
+    if ( pt_pos_grid_y < 0 || pt_pos_grid_y >= w_ ) return;
+
+    ++occupied.at<int>(pt_pos_grid_x, pt_pos_grid_y);
+    pt_mask.at<uchar>(pt_pos_grid_x, pt_pos_grid_y) = 255;
+
+    int x0 = kf_pos_grid_x_;
+    int y0 = kf_pos_grid_y_;
+    int x1 = pt_pos_grid_x;
+    int y1 = pt_pos_grid_y;
+
+    bool steep = ( abs(y1-y0) > abs(x1-x0) );
+    if (steep) {
+        std::swap(x0, y0);
+        std::swap(x1, y1);
+    }
+
+    if (x0 > x1) {
+        std::swap(x0, x1);
+        std::swap(y0, y1);
+    }
+
+    int dx = x1 - x0;
+    int dy = abs(y1 - y0);
+    double error = 0;
+    double deltaerr = ((double)dy) / ((double)dx);
+    int y = y0;
+    int ystep = (y0 < y1) ? 1 : -1;
+    for (int x = x0; x <= x1; ++x) {
+        if (steep) {
+            ++visited.at<int>(y, x);
+        }
+        else {
+            ++visited.at<int>(x, y);
+        }
+        error = error + deltaerr;
+
+        if (error >= 0.5){
+            y += ystep;
+            error -= - 1.0;
+        }
+    }
+}
+
+void MonocularSlamNode::GetGridMap () {
+
+    for (int row = 0; row < h_; ++row) {
+
+        for (int col = 0; col < w_; ++col) {
+
+            int visits = global_visit_counter_.at<int>(row, col);
+            int occupieds = global_occupied_counter_.at<int>(row, col);
+
+            grid_map_.at<float>(row, col) = (visits <= visit_thresh_) ? 0.5 :  (1.0 - float(occupieds / visits));
+            
+            grid_map_int_.at<char>(row, col) = (1 - grid_map_.at<float>(row, col)) * 100;
+
+        }
+    }
+    // cv::resize(grid_map_thresh_, grid_map_thresh_resized_, grid_map_thresh_resized_.size());
 }

@@ -21,6 +21,7 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "geometry_msgs/msg/pose_array.hpp"
+#include "nav_msgs/msg/occupancy_grid.hpp"
 
 /* TF2 Library */
 #include "tf2/exceptions.h"
@@ -63,6 +64,13 @@ private:
 
     geometry_msgs::msg::PoseArray GetAllKfsPts(rclcpp::Time msg_time);
     geometry_msgs::msg::PoseArray GetSingleKfPts(rclcpp::Time msg_time);
+    void PoseToCostmap (geometry_msgs::msg::PoseArray& kf_pts_array, rclcpp::Time msg_time);
+    void UpdateGridMap (geometry_msgs::msg::PoseArray& kf_pts_array);
+    void ProcessPts (const std::vector<geometry_msgs::msg::Pose> &pts, unsigned int n_pts, unsigned int start_id);
+    void ProcessPt (const geometry_msgs::msg::Point &curr_pt, cv::Mat &occupied, cv::Mat &visited, cv::Mat &pt_mask);
+    void SetGridOrigin (nav_msgs::msg::OccupancyGrid &grid, float &grid_min_x, float &grid_min_y);
+    void CreateCvMat (const unsigned int h, const unsigned int w);
+    void GetGridMap();
 
     ORB_SLAM3::System* m_SLAM;
     ORB_SLAM3::System::eSensor sensor_type;
@@ -75,6 +83,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr map_points_pub;
     rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr all_kfs_pts_pub;
     rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr single_kf_pts_pub;
+    rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_pub;
 
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster;
 
@@ -82,6 +91,24 @@ private:
 
     string child_frame_id;
     string world_frame_id;
+
+    nav_msgs::msg::OccupancyGrid grid_map_cost_msg_;
+
+    float scale_fac_ = 5.0;
+    float cloud_lim_[4] = {-20.0, 20.0, -20.0, 20.0};
+    float grid_lim_[4];
+    float norm_fac_[2];
+    unsigned int h_, w_;
+    unsigned int n_kf_received_ = 0;
+    unsigned int visit_thresh_ = 0;
+    float kf_pos_x_, kf_pos_y_;
+    int kf_pos_grid_x_, kf_pos_grid_y_;
+    cv::Mat global_occupied_counter_, global_visit_counter_;
+    cv::Mat local_occupied_counter_, local_visit_counter_;
+    cv::Mat local_map_pt_mask_;
+    cv::Mat grid_map_int_; 
+    cv::Mat grid_map_; 
+    cv::Mat grid_map_thresh_; 
 };
 
 #endif

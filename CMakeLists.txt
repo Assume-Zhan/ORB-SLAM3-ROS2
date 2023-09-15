@@ -26,6 +26,7 @@ find_package(ORB_SLAM3 REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 
 include_directories(
@@ -42,7 +43,7 @@ add_executable(mono
   src/monocular/mono.cpp
   src/monocular/monocular-slam-node.cpp
 )
-ament_target_dependencies(mono rclcpp sensor_msgs geometry_msgs cv_bridge ORB_SLAM3 tf2 tf2_ros Pangolin image_transport tf2_geometry_msgs OpenCV)
+ament_target_dependencies(mono rclcpp sensor_msgs nav_msgs geometry_msgs cv_bridge ORB_SLAM3 tf2 tf2_ros Pangolin image_transport tf2_geometry_msgs OpenCV)
 
 add_executable(rgbd
   src/rgbd/rgbd.cpp
