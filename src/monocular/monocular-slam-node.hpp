@@ -20,6 +20,7 @@
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
+#include "geometry_msgs/msg/pose_array.hpp"
 
 /* TF2 Library */
 #include "tf2/exceptions.h"
@@ -60,6 +61,8 @@ private:
     // Transformation
     tf2::Transform SE3f_to_tfTransform(Sophus::SE3f T_SE3f);
 
+    geometry_msgs::msg::PoseArray GetAllKfsPts(rclcpp::Time msg_time);
+
     ORB_SLAM3::System* m_SLAM;
     ORB_SLAM3::System::eSensor sensor_type;
 
@@ -69,6 +72,7 @@ private:
 
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr m_image_subscriber;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr map_points_pub;
+    rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr all_kfs_pts_pub;
 
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster;
 
