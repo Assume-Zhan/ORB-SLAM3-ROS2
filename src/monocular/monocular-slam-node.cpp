@@ -33,6 +33,7 @@ void MonocularSlamNode::setup_ros_publishers(Eigen::Vector3d rpy_rad) {
     map_points_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>("cloud_in", 1);
 
     all_kfs_pts_pub = this->create_publisher<geometry_msgs::msg::PoseArray>("all_kfs", 1);
+    single_kf_pts_pub = this->create_publisher<geometry_msgs::msg::PoseArray>("single_kfs", 1);
     
     tf_broadcaster  = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
     
@@ -71,7 +72,9 @@ void MonocularSlamNode::GrabImage(const ImageMsg::SharedPtr msg) {
     // TODO : Listen to base_link -> camera frame and only publish on "map frame" to "base_footprint"
     publish_ros_tf_transform(Twc, msg->header);
     publish_ros_tracked_mappoints(m_SLAM->GetAllMapPoints(), msg->header.stamp);
+
     all_kfs_pts_pub->publish(GetAllKfsPts(msg->header.stamp));
+    single_kf_pts_pub->publish(GetSingleKfPts(msg->header.stamp));
 }
 
 void MonocularSlamNode::publish_ros_tf_transform(Sophus::SE3f Twc_SE3f, std_msgs::msg::Header header) {
@@ -187,7 +190,9 @@ geometry_msgs::msg::PoseArray MonocularSlamNode::GetAllKfsPts(rclcpp::Time msg_t
     kfs_pts_array_.poses.push_back(geometry_msgs::msg::Pose());
     
     sort(key_frames_.begin(), key_frames_.end(), ORB_SLAM3::KeyFrame::lId);
+    
     unsigned int n_kf_ = 0;
+
     for (auto kf_ : key_frames_) {
 
         if ( kf_->isBad() ) continue;
@@ -245,4 +250,52 @@ geometry_msgs::msg::PoseArray MonocularSlamNode::GetAllKfsPts(rclcpp::Time msg_t
     kfs_pts_array_.poses[0].position.z = n_kf_;
 
     return kfs_pts_array_;
+}
+
+geometry_msgs::msg::PoseArray MonocularSlamNode::GetSingleKfPts (rclcpp::Time msg_time) {
+
+    ORB_SLAM3::KeyFrame* kf_ = m_SLAM->getTracker()->mCurrentFrame.mpReferenceKF;
+
+    // camera_pose, pts, ...
+    geometry_msgs::msg::PoseArray kf_pts_array_;
+
+    kf_pts_array_.header.frame_id = world_frame_id;
+    kf_pts_array_.header.stamp = msg_time;
+
+    if (kf_->isBad()) return kf_pts_array_;
+
+    // get rotation information
+    cv::Mat R_ = ORB_SLAM3::Converter::toCvMat(kf_->GetRotation()).t();
+    cv::Mat T_ = ORB_SLAM3::Converter::toCvMat(kf_->GetCameraCenter());
+    vector<float> q_ = ORB_SLAM3::Converter::toQuaternion(R_);
+
+    // get camera position
+
+    geometry_msgs::msg::Pose c_pose;
+    c_pose.position.x = T_.at<float>(0);
+    c_pose.position.y = T_.at<float>(1);
+    c_pose.position.z = T_.at<float>(2);
+    c_pose.orientation.x = q_[0];
+    c_pose.orientation.y = q_[1];
+    c_pose.orientation.z = q_[2];
+    c_pose.orientation.w = q_[3];
+    kf_pts_array_.poses.push_back(c_pose);
+    
+    std::vector<ORB_SLAM3::MapPoint*> map_pts_ = m_SLAM->GetTrackedMapPoints();
+
+    for (auto pt_ : map_pts_) {
+        if (!pt_ || pt_->isBad()) continue;
+
+        cv::Mat pt_position_ = ORB_SLAM3::Converter::toCvMat(pt_->GetWorldPos());
+
+        if (pt_position_.empty()) continue;
+
+        geometry_msgs::msg::Pose curr_pt;
+        curr_pt.position.x = pt_position_.at<float>(0);
+        curr_pt.position.y = pt_position_.at<float>(1);
+        curr_pt.position.z = pt_position_.at<float>(2);
+        kf_pts_array_.poses.push_back(curr_pt);
+    }
+
+    return kf_pts_array_;
 }
